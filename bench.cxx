@@ -14,6 +14,7 @@ int main(int argv, char **argc)
     int n;
     read_mat(argc[1], &n, &mat1);
     read_mat(argc[2], &n, &mat2);
+    int n_blk = atoi(argc[3]), m = atoi(argc[4]), l = atoi(argc[5]);  
     std::size_t n_large = n;
 
     float *dst_cblas = (float*)aligned_alloc(64, (sizeof(float) * n * n));
@@ -35,28 +36,32 @@ int main(int argv, char **argc)
     printf("OpenBLAS time: %lfs, gflops: %f\n", time_sum_blas/10.0/US_PER_S, gflops);
     //print_mat(dst_cblas, n);
 
-    float *dst = (float*)aligned_alloc(64, 8 * sizeof(float) * n * n);
+    float *dst = (float*)aligned_alloc(64, sizeof(float) * n * n);
+    int *dst_idx = (int*)aligned_alloc(64, sizeof(int) * n * n / l * n_blk / m);
     for (int idx = 0; idx < n; ++idx)
         for (int jdx = 0; jdx < n; ++jdx)
             *(dst + idx*n + jdx) = 0;
 
     std::size_t time_sum = 0;
 
-    cpu_transpose(mat2, n);
-    //cpu_transpose(mat1, n);
-    //cpu_transpose(dst, n);
+    // For SpMM, transpotition is done within the main kernel itself.
+    //cpu_transpose(mat2, n);
 
-    for (int idx = 0; idx < 10; ++idx)
+    for (int idx = 0; idx < 2; ++idx)
     {
         auto const start = std::chrono::high_resolution_clock::now();
-        simd_spmm(mat1, mat2, dst, n);
+        //simd_spmm(mat1, mat2, dst, n, n_blk, m, l);
+        squash_matrix(mat1, dst, dst_idx, n_blk, m, l, n); 
+        cpu_transpose(dst, n, n * n_blk / m); 
 
         auto const end = std::chrono::high_resolution_clock::now();
         time_sum += std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
         //printf("done\n");
 
-        //print_mat(dst, n);
-        verify_matrix(dst_cblas, dst, n);
+        print_mat(dst, n * n_blk / m, n);
+        printf("Index matrix: \n");
+        print_mat(dst_idx, n / l, n * n_blk / m);
+        //verify_matrix(dst_cblas, dst, n);
 
         for (int idx = 0; idx < n; ++idx)
             for (int jdx = 0; jdx < n; ++jdx)
@@ -65,8 +70,8 @@ int main(int argv, char **argc)
 
     printf("\n");
 
-    gflops = get_gflops(time_sum, 10*2*n_large*n_large*n_large);
-    printf("Avg time: %lfs, gflops: %f\n", time_sum/10.0/US_PER_S, gflops);
+    gflops = get_gflops(time_sum, 2*2*n_large*n_large*n_large);
+    printf("Avg time: %lfs, gflops: %f\n", time_sum/2.0/US_PER_S, gflops);
     
     free(mat1);
     free(mat2);
@@ -98,12 +103,35 @@ int read_mat(char *fname, int *n, float **dst)
     return 0;
 }
 
+void print_mat(int *mat, int n_col, int n_row)
+{
+    for (int idx = 0; idx < n_row; ++idx)
+    {
+        for (int jdx = 0; jdx < n_col; ++jdx)
+            printf("%d ", *(mat + idx*n_col + jdx));
+        printf("\n");
+    }
+
+}
+
+
 void print_mat(int *mat, int n)
 {
     for (int idx = 0; idx < n; ++idx)
     {
         for (int jdx = 0; jdx < n; ++jdx)
             printf("%d ", *(mat + idx*n + jdx));
+        printf("\n");
+    }
+
+}
+
+void print_mat(float *mat, int n_col, int n_row)
+{
+    for (int idx = 0; idx < n_row; ++idx)
+    {
+        for (int jdx = 0; jdx < n_col; ++jdx)
+            printf("%.0f ", *(mat + idx*n_col + jdx));
         printf("\n");
     }
 
