@@ -7,17 +7,19 @@
 #define US_PER_S 1000000
 #define GIGA     1000000000
 
-void simd_spmm(float * __restrict mat1, float * __restrict mat2, float * __restrict dst, int sz, int n, int m, int l);
+void simd_spmm(float * __restrict mat1, float * __restrict mat2, int * __restrict mat2i, float * __restrict dst, int sz, int n, int m, int l);
 void squash_matrix(float *in_mat, float *out_mat, int *idx_mat, 
                    int n, int m, int l, int sz);
 void* simd_spmm_worker(void *argv);
 void* simd_spmm_worker_avx512(void *argv);
+void cpu_transpose(int   *mat, int n_col, int n_row);
 void cpu_transpose(float *mat, int n_col, int n_row);
 void cpu_transpose(float *mat, int n);
 
 typedef struct{
     float *mat1;
     float *mat2;
+    int   *mat2i;
     float *dst;
     int    sz;
     int    n;
@@ -26,14 +28,14 @@ typedef struct{
     int    th_id;
 } spmmOptns;
 
-void simd_spmm(float * __restrict mat1, float * __restrict mat2, float * __restrict dst, int sz, int n, int m, int l)
+void simd_spmm(float * __restrict mat1, float * __restrict mat2, int * __restrict mat2i, float * __restrict dst, int sz, int n, int m, int l)
 {
     spmmOptns thd_optns[NUM_THREADS];
     pthread_t thds[NUM_THREADS];
 
     for (int th_id = 0; th_id < NUM_THREADS; ++th_id)
     {
-        spmmOptns optn =  {mat1, mat2, dst, sz, n, m, l, th_id};
+        spmmOptns optn =  {mat1, mat2, mat2i, dst, sz, n, m, l, th_id};
         thd_optns[th_id] = optn;
 #ifdef USE_AVX512
         pthread_create(&thds[th_id], NULL, &simd_spmm_worker_avx512, (void*)&thd_optns[th_id]);
@@ -91,6 +93,7 @@ void* simd_spmm_worker_avx512(void *argv)
     spmmOptns *optns = (spmmOptns*)argv;
     float * const mat1 = optns->mat1;
     float * const mat2 = optns->mat2;
+    int   * const mat2i= optns->mat2i;
     float * const dst  = optns->dst;
     const int    sz   = optns->sz;
     const int    n    = optns->n;
@@ -117,7 +120,44 @@ void* simd_spmm_worker_avx512(void *argv)
     float * __restrict mat1_ptr, * __restrict mat2_ptr, * __restrict dst_ptr;
     float * __restrict mat1_ptr2, * __restrict dst_ptr2;
     float * __restrict mat2_ptr2, * __restrict mat2_ptr3, * __restrict mat2_ptr4;
+    int   * __restrict mat2i_ptr;
 
+    mat1_ptr = mat1;
+    mat2_ptr = mat2;
+    mat2i_ptr = mat2i;
+
+    for (int i = 0; i < sz; ++i)
+    {
+        for (int j = 0; j < sz; ++j)
+        {
+            __m512 sums0 = _mm512_setzero_ps();
+
+            for (int k = 0; k < sz / compression_ratio; k += simd_ele_width)
+            {
+                mat1_ptr = mat1 + i*sz + k*compression_ratio;
+                mat2_ptr = mat2 + j*(sz/compression_ratio) + k;
+                mat2i_ptr = mat2i + (j/l)*(sz/compression_ratio) + k; 
+
+                __m512 b_vec = _mm512_load_ps(mat2_ptr);
+                __m512 a_vec1 = _mm512_load_ps(mat1_ptr);
+                __m512 a_vec2 = _mm512_load_ps(mat1_ptr + simd_ele_width);
+
+                __m512i idx_vec = _mm512_load_ps(mat2i_ptr);
+                const __m512i move_mask = _mm512_set_epi32(0x1C, 0x1C, 0x18, 0x18, 0x14, 0x14, 0x10, 0x10, 0x0C, 0x0C, 0x08, 0x08, 0x04, 0x04, 0x00, 0x00);
+                idx_vec = _mm512_add_epi32(idx_vec, move_mask);
+
+                __m512 a_vec = _mm512_permutex2var_ps(a_vec1, idx_vec, a_vec2);
+                sums0 = _mm512_fmadd_ps(a_vec, b_vec, sums0);
+            }
+
+            float sum0 = _mm512_reduce_add_ps(sums0);
+
+            *(dst + i*sz+ j) = sum0;
+        }
+    }
+    
+
+#if 0
     for (int i_outer = start_idx; i_outer < stop_idx; i_outer += sblock_ele_i)
     {
         for (int j_outer = 0; j_outer < n; j_outer += sblock_ele_j)
@@ -322,6 +362,7 @@ void* simd_spmm_worker_avx512(void *argv)
             }
         }
     }
+    #endif
     return NULL;
 }
 #endif // USE_AVX512

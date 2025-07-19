@@ -3,6 +3,21 @@
 #include <string.h>
 #include "simd_common.h"
 
+void cpu_transpose(int *mat, int n_col, int n_row)
+{
+    int tmp[n_col*n_row]; 
+
+    for (int idx_y = 0; idx_y < n_row; ++idx_y)
+    {
+        for (int idx_x = 0; idx_x < n_col; ++idx_x)
+        {
+            *(tmp + idx_x*n_row + idx_y) = *(mat + idx_y*n_col + idx_x);
+        }
+    }
+
+    memcpy(mat, tmp, n_col*n_row*sizeof(int));
+}
+
 void cpu_transpose(float *mat, int n_col, int n_row)
 {
     float tmp[n_col*n_row]; 

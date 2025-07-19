@@ -32,11 +32,13 @@ int main(int argv, char **argc)
         time_sum_blas += std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
 
     }
+    //print_mat(dst_cblas, n, n);
     double gflops = get_gflops(time_sum_blas, 10*2*n_large*n_large*n_large);
     printf("OpenBLAS time: %lfs, gflops: %f\n", time_sum_blas/10.0/US_PER_S, gflops);
     //print_mat(dst_cblas, n);
 
     float *dst = (float*)aligned_alloc(64, sizeof(float) * n * n);
+    float *mat2c = (float*)aligned_alloc(64, sizeof(float) * n * n * n_blk / m);
     int *dst_idx = (int*)aligned_alloc(64, sizeof(int) * n * n / l * n_blk / m);
     for (int idx = 0; idx < n; ++idx)
         for (int jdx = 0; jdx < n; ++jdx)
@@ -47,21 +49,27 @@ int main(int argv, char **argc)
     // For SpMM, transpotition is done within the main kernel itself.
     //cpu_transpose(mat2, n);
 
-    for (int idx = 0; idx < 2; ++idx)
+    for (int idx = 0; idx < 5; ++idx)
     {
+        squash_matrix(mat2, mat2c, dst_idx, n_blk, m, l, n); 
+        cpu_transpose(mat2c, n, n * n_blk / m); 
+        cpu_transpose(dst_idx, n / l , n * n_blk / m); 
         auto const start = std::chrono::high_resolution_clock::now();
-        //simd_spmm(mat1, mat2, dst, n, n_blk, m, l);
-        squash_matrix(mat1, dst, dst_idx, n_blk, m, l, n); 
-        cpu_transpose(dst, n, n * n_blk / m); 
+        simd_spmm(mat1, mat2c, dst_idx, dst, n, n_blk, m, l);
 
         auto const end = std::chrono::high_resolution_clock::now();
         time_sum += std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
         //printf("done\n");
 
-        print_mat(dst, n * n_blk / m, n);
-        printf("Index matrix: \n");
-        print_mat(dst_idx, n / l, n * n_blk / m);
-        //verify_matrix(dst_cblas, dst, n);
+        //print_mat(dst, n, n);
+        //printf("Original matrix: \n");
+        //print_mat(mat2, n, n );
+        //printf("Compressed matrix: \n");
+        //print_mat(mat2c, n * n_blk / m, n);
+        //printf("Index matrix: \n");
+        // Already transposed.
+        //print_mat(dst_idx, n * n_blk / m, n / l);
+        verify_matrix(dst_cblas, dst, n);
 
         for (int idx = 0; idx < n; ++idx)
             for (int jdx = 0; jdx < n; ++jdx)
