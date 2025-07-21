@@ -180,7 +180,7 @@ void verify_matrix(float *exp, float *act, int n)
 
             if (exp_val != act_val)
             {
-                printf("difference at: (%d, %d). exp: %f, act: %f\n", idx_x, idx_y, exp_val, act_val);
+                printf("difference at: (%d, %d). exp: %.2f, act: %.2f\n", idx_x, idx_y, exp_val, act_val);
                 incorrect = 1;
             }
         }
