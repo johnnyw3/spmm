@@ -5,7 +5,7 @@
 
 void cpu_transpose(int *mat, int n_col, int n_row)
 {
-    int tmp[n_col*n_row]; 
+    int *tmp = (int*)malloc(sizeof(int) * n_col * n_row);
 
     for (int idx_y = 0; idx_y < n_row; ++idx_y)
     {
@@ -16,11 +16,12 @@ void cpu_transpose(int *mat, int n_col, int n_row)
     }
 
     memcpy(mat, tmp, n_col*n_row*sizeof(int));
+    free(tmp);
 }
 
 void cpu_transpose(float *mat, int n_col, int n_row)
 {
-    float tmp[n_col*n_row]; 
+    float *tmp = (float*)malloc(sizeof(float) * n_col * n_row);
 
     for (int idx_y = 0; idx_y < n_row; ++idx_y)
     {
@@ -31,6 +32,7 @@ void cpu_transpose(float *mat, int n_col, int n_row)
     }
 
     memcpy(mat, tmp, n_col*n_row*sizeof(float));
+    free(tmp);
 }
 
 void cpu_transpose(float *mat, int n)

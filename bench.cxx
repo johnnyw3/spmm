@@ -18,12 +18,11 @@ int main(int argv, char **argc)
     std::size_t n_large = n;
 
     float *dst_cblas = (float*)aligned_alloc(64, (sizeof(float) * n * n));
-    std::size_t time_sum_blas =0;
-    for (int idx = 0; idx < 10; ++idx)
+    std::size_t time_sum_blas = 0;
+    int num_runs_cblas = 10;
+    for (int idx = 0; idx < num_runs_cblas; ++idx)
     {
-        for (int idx = 0; idx < n; ++idx)
-            for (int jdx = 0; jdx < n; ++jdx)
-                *(dst_cblas + idx*n + jdx) = 0;
+        memset(dst_cblas, 0, sizeof(float) * n * n);
 
         auto const start = std::chrono::high_resolution_clock::now();
         cblas_semm(mat1, mat2, dst_cblas, n);
@@ -33,27 +32,25 @@ int main(int argv, char **argc)
 
     }
     //print_mat(dst_cblas, n, n);
-    double gflops = get_gflops(time_sum_blas, 10*2*n_large*n_large*n_large);
-    printf("OpenBLAS time: %lfs, gflops: %f\n", time_sum_blas/10.0/US_PER_S, gflops);
+    double gflops = get_gflops(time_sum_blas, num_runs_cblas*2*n_large*n_large*n_large);
+    printf("OpenBLAS time: %lfs, gflops: %f\n", time_sum_blas*1.0/num_runs_cblas/US_PER_S, gflops);
     //print_mat(dst_cblas, n);
 
     float *dst = (float*)aligned_alloc(64, sizeof(float) * n * n);
     float *mat2c = (float*)aligned_alloc(64, sizeof(float) * n * n * n_blk / m);
     int *dst_idx = (int*)aligned_alloc(64, sizeof(int) * n * n / l * n_blk / m);
-    for (int idx = 0; idx < n; ++idx)
-        for (int jdx = 0; jdx < n; ++jdx)
-            *(dst + idx*n + jdx) = 0;
+    memset(dst, 0, sizeof(float) * n * n);
 
     std::size_t time_sum = 0;
+    int num_runs = 10;
 
-    // For SpMM, transpotition is done within the main kernel itself.
-    //cpu_transpose(mat2, n);
-
-    for (int idx = 0; idx < 5; ++idx)
+    for (int idx = 0; idx < num_runs; ++idx)
     {
+        // PREP WORK: other papers didn't include this work in their time calculations...
         squash_matrix(mat2, mat2c, dst_idx, n_blk, m, l, n); 
         cpu_transpose(mat2c, n, n * n_blk / m); 
         cpu_transpose(dst_idx, n / l , n * n_blk / m); 
+
         auto const start = std::chrono::high_resolution_clock::now();
         simd_spmm(mat1, mat2c, dst_idx, dst, n, n_blk, m, l);
 
@@ -71,19 +68,21 @@ int main(int argv, char **argc)
         //print_mat(dst_idx, n * n_blk / m, n / l);
         verify_matrix(dst_cblas, dst, n);
 
-        for (int idx = 0; idx < n; ++idx)
-            for (int jdx = 0; jdx < n; ++jdx)
-                *(dst + idx*n + jdx) = 0;
+        // zero dst so that the algorithm actually needs to successfully run for
+        // multiple tests to pass.
+        memset(dst, 0, sizeof(float) * n * n);
     }
 
     printf("\n");
 
-    gflops = get_gflops(time_sum, 2*2*n_large*n_large*n_large);
-    printf("Avg time: %lfs, gflops: %f\n", time_sum/2.0/US_PER_S, gflops);
+    gflops = get_gflops(time_sum, num_runs*2*n_large*n_large*n_large);
+    printf("Avg time: %lfs, gflops: %f\n", time_sum*1.0/num_runs/US_PER_S, gflops);
     
     free(mat1);
     free(mat2);
+    free(mat2c);
     free(dst);
+    free(dst_idx);
     return 0;
 
 }
