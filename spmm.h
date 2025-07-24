@@ -85,9 +85,6 @@ void* simd_spmm_worker(void *argv)
 }
 
 #ifdef USE_AVX512
-/*
- * This just has my GEMM code copied in to use as a starting place. It will be 
- * modified to work with SpMM in future ... */
 void* simd_spmm_worker_avx512(void *argv)
 {
     spmmOptns *optns = (spmmOptns*)argv;
@@ -121,7 +118,8 @@ void* simd_spmm_worker_avx512(void *argv)
     float * __restrict mat1_ptr, * __restrict mat2_ptr, * __restrict dst_ptr;
     float * __restrict mat1_ptr2, * __restrict dst_ptr2;
     float * __restrict mat2_ptr2, * __restrict mat2_ptr3, * __restrict mat2_ptr4;
-    int   * __restrict mat2i_ptr;
+    int   * __restrict mat2i_ptr, * __restrict mat2i_ptr2;
+    int   * __restrict mat2i_ptr3, * __restrict mat2i_ptr4;
 
     mat1_ptr = mat1;
     mat2_ptr = mat2;
@@ -155,9 +153,12 @@ void* simd_spmm_worker_avx512(void *argv)
             for (int j_outer = 0; j_outer < sz; j_outer += sblock_ele_j)
             {
                 float packed_b[sblock_ele_j*sblock_ele_k/compression_ratio] __attribute__ ((__aligned__(64)));
+                int   packed_bi[sblock_ele_j/l*sblock_ele_k/compression_ratio] __attribute__ ((__aligned__(64)));
 
                 mat2_ptr = mat2 + (j_outer)*sz/compression_ratio + k_outer;
+                mat2i_ptr = mat2i + (j_outer)*sz/compression_ratio/l + k_outer;
                 mat1_ptr = packed_b;
+                mat2i_ptr2 = packed_bi;
 
                 for (int idx = 0; idx < sblock_ele_j;)
                 {
@@ -171,10 +172,29 @@ void* simd_spmm_worker_avx512(void *argv)
 
 #if BLOCK_K != SBLOCK_K
                     if (! (idx%block_ele_j) )
+                    {
                         mat1_ptr -= block_ele_k/compression_ratio*block_ele_j - block_ele_k/compression_ratio;
-                    else
+                    } else
 #endif
                         mat1_ptr -= block_ele_k/compression_ratio*(block_ele_j)*block_nk - block_ele_k/compression_ratio;
+                }
+                for (int idx = 0; idx < sblock_ele_j/l;)
+                {
+                    for (int jdx = 0; jdx < sblock_ele_k/compression_ratio; jdx += block_ele_k/compression_ratio)
+                    {
+                        memcpy(mat2i_ptr2, mat2i_ptr + jdx, BLOCK_K / compression_ratio);
+                        mat2i_ptr2 += block_ele_k/compression_ratio*block_ele_j/l;
+                    }
+                    mat2i_ptr += sz/compression_ratio;
+                    ++idx;
+
+#if BLOCK_K != SBLOCK_K
+                    if (! (idx%block_ele_j) )
+                    {
+                        mat2i_ptr2 -= block_ele_k/compression_ratio*block_ele_j/l - block_ele_k/compression_ratio;
+                    } else
+#endif
+                        mat2i_ptr2 -= block_ele_k/compression_ratio*(block_ele_j/l)*block_nk - block_ele_k/compression_ratio;
                 }
 
     for (int i_outer2 = 0; i_outer2< sblock_ele_i; i_outer2+= block_ele_i)
@@ -231,7 +251,14 @@ void* simd_spmm_worker_avx512(void *argv)
                         mat2_ptr3 = mat2_ptr2 + block_ele_k/compression_ratio;
                         mat2_ptr4 = mat2_ptr3 + block_ele_k/compression_ratio;
 
-                        mat2i_ptr = mat2i +  ( (j_outer + j_outer2 + j_inner)/l )*compressed_sz + k_outer + k_outer2;
+                        mat2i_ptr  = packed_bi + (j_inner + j_outer2*block_nk)/l*block_ele_k/compression_ratio + k_outer2*block_ele_j/l;
+                        mat2i_ptr2= mat2i_ptr + (1/l)*block_ele_k/compression_ratio;
+                        mat2i_ptr3= mat2i_ptr + (2/l)*block_ele_k/compression_ratio;
+                        mat2i_ptr4= mat2i_ptr + (3/l)*block_ele_k/compression_ratio;
+                        //mat2i_ptr = mat2i +  ( (j_outer + j_outer2 + j_inner)/l )*compressed_sz + k_outer + k_outer2;
+                        //mat2i_ptr2= mat2i_ptr + compressed_sz;
+                        //mat2i_ptr3= mat2i_ptr2+ compressed_sz;
+                        //mat2i_ptr4= mat2i_ptr3+ compressed_sz;
 
                         __m512 b_vec, b_vec2, b_vec3, b_vec4, a_vec_t11, a_vec_t12, a_vec_t21,
                                a_vec_t22, a_vec, a_vec2, a_vec3, a_vec4, dst2, dst3;
@@ -239,10 +266,16 @@ void* simd_spmm_worker_avx512(void *argv)
                         for (int k_inner = 0; k_inner < block_ele_k / compression_ratio; k_inner += simd_ele_width)
                         {
                             __m512i idx_vec = _mm512_load_ps(mat2i_ptr + k_inner);
+                            __m512i idx_vec2= _mm512_load_ps(mat2i_ptr2+ k_inner);
+                            __m512i idx_vec3= _mm512_load_ps(mat2i_ptr3+ k_inner);
+                            __m512i idx_vec4= _mm512_load_ps(mat2i_ptr4+ k_inner);
                             // TODO: this is for a fixed 2:4 4-wide vectorwide N:M sparsity.
                             //       Should generate masks at runtime for parameterization.
                             const __m512i move_mask = _mm512_set_epi32(0x1C, 0x1C, 0x18, 0x18, 0x14, 0x14, 0x10, 0x10, 0x0C, 0x0C, 0x08, 0x08, 0x04, 0x04, 0x00, 0x00);
                             idx_vec = _mm512_add_epi32(idx_vec, move_mask);
+                            idx_vec2= _mm512_add_epi32(idx_vec2, move_mask);
+                            idx_vec3= _mm512_add_epi32(idx_vec3, move_mask);
+                            idx_vec4= _mm512_add_epi32(idx_vec4, move_mask);
 
                             b_vec = _mm512_load_ps(mat2_ptr + k_inner);
                             b_vec2= _mm512_load_ps(mat2_ptr2+ k_inner);
@@ -254,19 +287,26 @@ void* simd_spmm_worker_avx512(void *argv)
                             a_vec_t21 = _mm512_load_ps(mat1_ptr2+ k_inner*compression_ratio);
                             a_vec_t22 = _mm512_load_ps(mat1_ptr2+ k_inner*compression_ratio + simd_ele_width);
                             a_vec = _mm512_permutex2var_ps(a_vec_t11, idx_vec, a_vec_t12);
-                            a_vec2= _mm512_permutex2var_ps(a_vec_t21, idx_vec, a_vec_t22);
+                            a_vec2= _mm512_permutex2var_ps(a_vec_t21, idx_vec , a_vec_t22);
+                            a_vec3= _mm512_permutex2var_ps(a_vec_t11, idx_vec2, a_vec_t12);
+                            a_vec4= _mm512_permutex2var_ps(a_vec_t21, idx_vec2, a_vec_t22);
 
                             sums0 = _mm512_fmadd_ps(a_vec, b_vec, sums0);
                             sums20 = _mm512_fmadd_ps(a_vec2, b_vec, sums20);
 
-                            sums1 = _mm512_fmadd_ps(a_vec, b_vec2, sums1);
-                            sums21 = _mm512_fmadd_ps(a_vec2, b_vec2, sums21);
+                            sums1 = _mm512_fmadd_ps(a_vec3, b_vec2, sums1);
+                            sums21 = _mm512_fmadd_ps(a_vec4, b_vec2, sums21);
+
+                            a_vec = _mm512_permutex2var_ps(a_vec_t11, idx_vec3, a_vec_t12);
+                            a_vec2= _mm512_permutex2var_ps(a_vec_t21, idx_vec3, a_vec_t22);
+                            a_vec3= _mm512_permutex2var_ps(a_vec_t11, idx_vec4, a_vec_t12);
+                            a_vec4= _mm512_permutex2var_ps(a_vec_t21, idx_vec4, a_vec_t22);
 
                             sums2 = _mm512_fmadd_ps(a_vec, b_vec3, sums2);
                             sums22 = _mm512_fmadd_ps(a_vec2, b_vec3, sums22);
 
-                            sums3 = _mm512_fmadd_ps(a_vec, b_vec4, sums3);
-                            sums23 = _mm512_fmadd_ps(a_vec2, b_vec4, sums23);
+                            sums3 = _mm512_fmadd_ps(a_vec3, b_vec4, sums3);
+                            sums23 = _mm512_fmadd_ps(a_vec4, b_vec4, sums23);
                         }
 
                         __m512 const upper = _mm512_unpacklo_ps(sums0, sums2); 
@@ -293,15 +333,27 @@ void* simd_spmm_worker_avx512(void *argv)
                         mat2_ptr2 = mat2_ptr + block_ele_k/compression_ratio;
                         mat2_ptr3 = mat2_ptr2 + block_ele_k/compression_ratio;
                         mat2_ptr4 = mat2_ptr3 + block_ele_k/compression_ratio;
-                        mat2i_ptr += (8/l)*compressed_sz;
+                        mat2i_ptr += (8/l)*block_ele_k/compression_ratio;
+                        mat2i_ptr2+= (8/l)*block_ele_k/compression_ratio;
+                        mat2i_ptr3+= (8/l)*block_ele_k/compression_ratio;
+                        mat2i_ptr4+= (8/l)*block_ele_k/compression_ratio;
+                        //mat2i_ptr2+= (8/l)*compressed_sz;
+                        //mat2i_ptr3+= (8/l)*compressed_sz;
+                        //mat2i_ptr4+= (8/l)*compressed_sz;
 
                         for (int k_inner = 0; k_inner < block_ele_k / compression_ratio; k_inner += simd_ele_width)
                         {
                             __m512i idx_vec = _mm512_load_ps(mat2i_ptr + k_inner);
+                            __m512i idx_vec2= _mm512_load_ps(mat2i_ptr2+ k_inner);
+                            __m512i idx_vec3= _mm512_load_ps(mat2i_ptr3+ k_inner);
+                            __m512i idx_vec4= _mm512_load_ps(mat2i_ptr4+ k_inner);
                             // TODO: this is for a fixed 2:4 4-wide vectorwide N:M sparsity.
                             //       Should generate masks at runtime for parameterization.
                             const __m512i move_mask = _mm512_set_epi32(0x1C, 0x1C, 0x18, 0x18, 0x14, 0x14, 0x10, 0x10, 0x0C, 0x0C, 0x08, 0x08, 0x04, 0x04, 0x00, 0x00);
                             idx_vec = _mm512_add_epi32(idx_vec, move_mask);
+                            idx_vec2= _mm512_add_epi32(idx_vec2, move_mask);
+                            idx_vec3= _mm512_add_epi32(idx_vec3, move_mask);
+                            idx_vec4= _mm512_add_epi32(idx_vec4, move_mask);
 
                             b_vec = _mm512_load_ps(mat2_ptr + k_inner);
                             b_vec2= _mm512_load_ps(mat2_ptr2+ k_inner);
@@ -313,19 +365,26 @@ void* simd_spmm_worker_avx512(void *argv)
                             a_vec_t21 = _mm512_load_ps(mat1_ptr2+ k_inner*compression_ratio);
                             a_vec_t22 = _mm512_load_ps(mat1_ptr2+ k_inner*compression_ratio + simd_ele_width);
                             a_vec = _mm512_permutex2var_ps(a_vec_t11, idx_vec, a_vec_t12);
-                            a_vec2= _mm512_permutex2var_ps(a_vec_t21, idx_vec, a_vec_t22);
+                            a_vec2= _mm512_permutex2var_ps(a_vec_t21, idx_vec , a_vec_t22);
+                            a_vec3= _mm512_permutex2var_ps(a_vec_t11, idx_vec2, a_vec_t12);
+                            a_vec4= _mm512_permutex2var_ps(a_vec_t21, idx_vec2, a_vec_t22);
 
                             sums8 = _mm512_fmadd_ps(a_vec, b_vec, sums8);
                             sums28 = _mm512_fmadd_ps(a_vec2, b_vec, sums28);
 
-                            sums9 = _mm512_fmadd_ps(a_vec, b_vec2, sums9);
-                            sums29 = _mm512_fmadd_ps(a_vec2, b_vec2, sums29);
+                            sums9 = _mm512_fmadd_ps(a_vec3, b_vec2, sums9);
+                            sums29 = _mm512_fmadd_ps(a_vec4, b_vec2, sums29);
+
+                            a_vec = _mm512_permutex2var_ps(a_vec_t11, idx_vec3, a_vec_t12);
+                            a_vec2= _mm512_permutex2var_ps(a_vec_t21, idx_vec3, a_vec_t22);
+                            a_vec3= _mm512_permutex2var_ps(a_vec_t11, idx_vec4, a_vec_t12);
+                            a_vec4= _mm512_permutex2var_ps(a_vec_t21, idx_vec4, a_vec_t22);
 
                             sumsA = _mm512_fmadd_ps(a_vec, b_vec3, sumsA);
                             sums2A = _mm512_fmadd_ps(a_vec2, b_vec3, sums2A);
 
-                            sumsB = _mm512_fmadd_ps(a_vec, b_vec4, sumsB);
-                            sums2B = _mm512_fmadd_ps(a_vec2, b_vec4, sums2B);
+                            sumsB = _mm512_fmadd_ps(a_vec3, b_vec4, sumsB);
+                            sums2B = _mm512_fmadd_ps(a_vec4, b_vec4, sums2B);
                         }
 
                         __m512 const upper4 = _mm512_unpacklo_ps(sums8, sumsA);
@@ -353,15 +412,27 @@ void* simd_spmm_worker_avx512(void *argv)
                         mat2_ptr2 = mat2_ptr + block_ele_k/compression_ratio;
                         mat2_ptr3 = mat2_ptr2 + block_ele_k/compression_ratio;
                         mat2_ptr4 = mat2_ptr3 + block_ele_k/compression_ratio;
-                        mat2i_ptr -= (4/l)*compressed_sz;
+                        mat2i_ptr -= (4/l)*block_ele_k/compression_ratio;
+                        mat2i_ptr2-= (4/l)*block_ele_k/compression_ratio;
+                        mat2i_ptr3-= (4/l)*block_ele_k/compression_ratio;
+                        mat2i_ptr4-= (4/l)*block_ele_k/compression_ratio;
+                        //mat2i_ptr2-= (4/l)*compressed_sz;
+                        //mat2i_ptr3-= (4/l)*compressed_sz;
+                        //mat2i_ptr4-= (4/l)*compressed_sz;
 
                         for (int k_inner = 0; k_inner < block_ele_k / compression_ratio; k_inner += simd_ele_width)
                         {
                             __m512i idx_vec = _mm512_load_ps(mat2i_ptr + k_inner);
+                            __m512i idx_vec2= _mm512_load_ps(mat2i_ptr2+ k_inner);
+                            __m512i idx_vec3= _mm512_load_ps(mat2i_ptr3+ k_inner);
+                            __m512i idx_vec4= _mm512_load_ps(mat2i_ptr4+ k_inner);
                             // TODO: this is for a fixed 2:4 4-wide vectorwide N:M sparsity.
                             //       Should generate masks at runtime for parameterization.
                             const __m512i move_mask = _mm512_set_epi32(0x1C, 0x1C, 0x18, 0x18, 0x14, 0x14, 0x10, 0x10, 0x0C, 0x0C, 0x08, 0x08, 0x04, 0x04, 0x00, 0x00);
                             idx_vec = _mm512_add_epi32(idx_vec, move_mask);
+                            idx_vec2= _mm512_add_epi32(idx_vec2, move_mask);
+                            idx_vec3= _mm512_add_epi32(idx_vec3, move_mask);
+                            idx_vec4= _mm512_add_epi32(idx_vec4, move_mask);
 
                             b_vec = _mm512_load_ps(mat2_ptr + k_inner);
                             b_vec2= _mm512_load_ps(mat2_ptr2+ k_inner);
@@ -373,19 +444,26 @@ void* simd_spmm_worker_avx512(void *argv)
                             a_vec_t21 = _mm512_load_ps(mat1_ptr2+ k_inner*compression_ratio);
                             a_vec_t22 = _mm512_load_ps(mat1_ptr2+ k_inner*compression_ratio + simd_ele_width);
                             a_vec = _mm512_permutex2var_ps(a_vec_t11, idx_vec, a_vec_t12);
-                            a_vec2= _mm512_permutex2var_ps(a_vec_t21, idx_vec, a_vec_t22);
+                            a_vec2= _mm512_permutex2var_ps(a_vec_t21, idx_vec , a_vec_t22);
+                            a_vec3= _mm512_permutex2var_ps(a_vec_t11, idx_vec2, a_vec_t12);
+                            a_vec4= _mm512_permutex2var_ps(a_vec_t21, idx_vec2, a_vec_t22);
 
                             sums4 = _mm512_fmadd_ps(a_vec, b_vec, sums4);
                             sums24 = _mm512_fmadd_ps(a_vec2, b_vec, sums24);
 
-                            sums5 = _mm512_fmadd_ps(a_vec, b_vec2, sums5);
-                            sums25 = _mm512_fmadd_ps(a_vec2, b_vec2, sums25);
+                            sums5 = _mm512_fmadd_ps(a_vec3, b_vec2, sums5);
+                            sums25 = _mm512_fmadd_ps(a_vec4, b_vec2, sums25);
+
+                            a_vec = _mm512_permutex2var_ps(a_vec_t11, idx_vec3, a_vec_t12);
+                            a_vec2= _mm512_permutex2var_ps(a_vec_t21, idx_vec3, a_vec_t22);
+                            a_vec3= _mm512_permutex2var_ps(a_vec_t11, idx_vec4, a_vec_t12);
+                            a_vec4= _mm512_permutex2var_ps(a_vec_t21, idx_vec4, a_vec_t22);
 
                             sums6 = _mm512_fmadd_ps(a_vec, b_vec3, sums6);
                             sums26 = _mm512_fmadd_ps(a_vec2, b_vec3, sums26);
 
-                            sums7 = _mm512_fmadd_ps(a_vec, b_vec4, sums7);
-                            sums27 = _mm512_fmadd_ps(a_vec2, b_vec4, sums27);
+                            sums7 = _mm512_fmadd_ps(a_vec3, b_vec4, sums7);
+                            sums27 = _mm512_fmadd_ps(a_vec4, b_vec4, sums27);
                         }
 
                         __m512 const upper8 = _mm512_unpacklo_ps(sums4, sums6); // 0100 1110
@@ -412,15 +490,27 @@ void* simd_spmm_worker_avx512(void *argv)
                         mat2_ptr2 = mat2_ptr + block_ele_k/compression_ratio;
                         mat2_ptr3 = mat2_ptr2 + block_ele_k/compression_ratio;
                         mat2_ptr4 = mat2_ptr3 + block_ele_k/compression_ratio;
-                        mat2i_ptr += (8/l)*compressed_sz;
+                        mat2i_ptr += (8/l)*block_ele_k/compression_ratio;
+                        mat2i_ptr2+= (8/l)*block_ele_k/compression_ratio;
+                        mat2i_ptr3+= (8/l)*block_ele_k/compression_ratio;
+                        mat2i_ptr4+= (8/l)*block_ele_k/compression_ratio;
+                        //mat2i_ptr2+= (8/l)*compressed_sz;
+                        //mat2i_ptr3+= (8/l)*compressed_sz;
+                        //mat2i_ptr4+= (8/l)*compressed_sz;
 
                         for (int k_inner = 0; k_inner < block_ele_k / compression_ratio; k_inner += simd_ele_width)
                         {
                             __m512i idx_vec = _mm512_load_ps(mat2i_ptr + k_inner);
+                            __m512i idx_vec2= _mm512_load_ps(mat2i_ptr2+ k_inner);
+                            __m512i idx_vec3= _mm512_load_ps(mat2i_ptr3+ k_inner);
+                            __m512i idx_vec4= _mm512_load_ps(mat2i_ptr4+ k_inner);
                             // TODO: this is for a fixed 2:4 4-wide vectorwide N:M sparsity.
                             //       Should generate masks at runtime for parameterization.
                             const __m512i move_mask = _mm512_set_epi32(0x1C, 0x1C, 0x18, 0x18, 0x14, 0x14, 0x10, 0x10, 0x0C, 0x0C, 0x08, 0x08, 0x04, 0x04, 0x00, 0x00);
                             idx_vec = _mm512_add_epi32(idx_vec, move_mask);
+                            idx_vec2= _mm512_add_epi32(idx_vec2, move_mask);
+                            idx_vec3= _mm512_add_epi32(idx_vec3, move_mask);
+                            idx_vec4= _mm512_add_epi32(idx_vec4, move_mask);
 
                             b_vec = _mm512_load_ps(mat2_ptr + k_inner);
                             b_vec2= _mm512_load_ps(mat2_ptr2+ k_inner);
@@ -432,19 +522,26 @@ void* simd_spmm_worker_avx512(void *argv)
                             a_vec_t21 = _mm512_load_ps(mat1_ptr2+ k_inner*compression_ratio);
                             a_vec_t22 = _mm512_load_ps(mat1_ptr2+ k_inner*compression_ratio + simd_ele_width);
                             a_vec = _mm512_permutex2var_ps(a_vec_t11, idx_vec, a_vec_t12);
-                            a_vec2= _mm512_permutex2var_ps(a_vec_t21, idx_vec, a_vec_t22);
+                            a_vec2= _mm512_permutex2var_ps(a_vec_t21, idx_vec , a_vec_t22);
+                            a_vec3= _mm512_permutex2var_ps(a_vec_t11, idx_vec2, a_vec_t12);
+                            a_vec4= _mm512_permutex2var_ps(a_vec_t21, idx_vec2, a_vec_t22);
 
                             sumsC = _mm512_fmadd_ps(a_vec, b_vec, sumsC);
                             sums2C = _mm512_fmadd_ps(a_vec2, b_vec, sums2C);
 
-                            sumsD = _mm512_fmadd_ps(a_vec, b_vec2, sumsD);
-                            sums2D = _mm512_fmadd_ps(a_vec2, b_vec2, sums2D);
+                            sumsD = _mm512_fmadd_ps(a_vec3, b_vec2, sumsD);
+                            sums2D = _mm512_fmadd_ps(a_vec4, b_vec2, sums2D);
+
+                            a_vec = _mm512_permutex2var_ps(a_vec_t11, idx_vec3, a_vec_t12);
+                            a_vec2= _mm512_permutex2var_ps(a_vec_t21, idx_vec3, a_vec_t22);
+                            a_vec3= _mm512_permutex2var_ps(a_vec_t11, idx_vec4, a_vec_t12);
+                            a_vec4= _mm512_permutex2var_ps(a_vec_t21, idx_vec4, a_vec_t22);
 
                             sumsE = _mm512_fmadd_ps(a_vec, b_vec3, sumsE);
                             sums2E = _mm512_fmadd_ps(a_vec2, b_vec3, sums2E);
 
-                            sumsF = _mm512_fmadd_ps(a_vec, b_vec4, sumsF);
-                            sums2F = _mm512_fmadd_ps(a_vec2, b_vec4, sums2F);
+                            sumsF = _mm512_fmadd_ps(a_vec3, b_vec4, sumsF);
+                            sums2F = _mm512_fmadd_ps(a_vec4, b_vec4, sums2F);
                         }
 
                         __m512 const upperC = _mm512_unpacklo_ps(sumsC, sumsE); 

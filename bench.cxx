@@ -63,9 +63,11 @@ int main(int argv, char **argc)
         //print_mat(mat2, n, n );
         //printf("Compressed matrix: \n");
         //print_mat(mat2c, n * n_blk / m, n);
+        //print_mat(mat2c, n, n * n_blk / m);
         //printf("Index matrix: \n");
         // Already transposed.
         //print_mat(dst_idx, n * n_blk / m, n / l);
+        //print_mat(dst_idx, n/l, n * n_blk / m);
         verify_matrix(dst_cblas, dst, n);
 
         // zero dst so that the algorithm actually needs to successfully run for
