@@ -4,8 +4,7 @@ High-performance CPU SpMM (N:M sparsity) algorithm accelerated using AVX.
 
 TODOs:
 
- * SpMM-specific performance optimizations
- * Parameterized N and M (currently only works for 2:4 vectorwise sparsity)
+ * Parameterized N and M (currently only works for 2:4 sparsity)
 
 # Prerequisites
 
