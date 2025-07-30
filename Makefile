@@ -15,7 +15,7 @@ build/libspmm.a: spmm.cxx spmm.h simd_common.h
 	ar rcs build/libspmm.a build/spmm.o
 
 bench: build/libspmm.a bench.cxx bench.h
-	$(CC) -o build/bench bench.cxx -Lbuild -lspmm -lopenblas $(CXXFLAGS)
+	$(CC) -o build/bench bench.cxx -Lbuild -lspmm -lopenblas -I/usr/include/eigen3/ $(CXXFLAGS)
 
 clean:
 	rm -rf build

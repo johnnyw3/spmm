@@ -2,6 +2,8 @@
 #include <chrono>
 #include <stdint.h>
 #include <cblas.h>
+#include <Eigen/SparseCore>
+#include <Eigen/Dense>
 #include "simd_common.h"
 #include "spmm.h"
 #include "bench.h"
@@ -17,6 +19,7 @@ int main(int argv, char **argc)
     int n_blk = atoi(argc[3]), m = atoi(argc[4]), l = atoi(argc[5]);  
     std::size_t n_large = n;
 
+    // OpenBLAS (GEMM) benchmark
     float *dst_cblas = (float*)aligned_alloc(64, (sizeof(float) * n * n));
     std::size_t time_sum_blas = 0;
     int num_runs_cblas = 10;
@@ -35,6 +38,42 @@ int main(int argv, char **argc)
     double gflops = get_gflops(time_sum_blas, num_runs_cblas*2*n_large*n_large*n_large);
     printf("OpenBLAS time: %lfs, gflops: %f\n", time_sum_blas*1.0/num_runs_cblas/US_PER_S, gflops);
     //print_mat(dst_cblas, n);
+
+    // Eigen (SpMM) benchmark
+    std::vector<Eigen::Triplet<float>> triplets;
+    triplets.reserve( n * n * n_blk / m);
+    for (int idx = 0; idx < n; ++idx)
+    {
+        for (int jdx = 0; jdx < n; ++jdx)
+        {
+            if ( *(mat2 + idx*n + jdx) )
+                triplets.push_back( Eigen::Triplet<float>(idx, jdx, *(mat2 + idx*n + jdx) ) );
+        }
+    }
+    Eigen::SparseMatrix<float> mat2sp(n, n);
+    mat2sp.setFromTriplets(triplets.begin(), triplets.end());
+
+    Eigen::Map<Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> mat1dn(mat1, n, n);
+    Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> dstdn(n, n);
+
+    std::size_t time_sum_eigen = 0;
+    int num_runs_eigen = 3;
+    for (int idx = 0; idx < num_runs_eigen; ++idx)
+    {
+        auto const start = std::chrono::high_resolution_clock::now();
+        dstdn = mat1dn * mat2sp;
+
+        auto const end = std::chrono::high_resolution_clock::now();
+        verify_matrix(dst_cblas, dstdn.data(), n);
+        //printf("done\n");
+        time_sum_eigen += std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+
+    }
+    //print_mat(dst_cblas, n, n);
+    gflops = get_gflops(time_sum_eigen, num_runs_eigen*2*n_large*n_large*n_large);
+    printf("Eigen (sparse) time: %lfs, gflops: %f\n", time_sum_eigen*1.0/num_runs_eigen/US_PER_S, gflops);
+
+    // Now actually run our code.
 
     float *dst = (float*)aligned_alloc(64, sizeof(float) * n * n);
     float *mat2c = (float*)aligned_alloc(64, sizeof(float) * n * n * n_blk / m);
