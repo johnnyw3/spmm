@@ -2,6 +2,7 @@
 #define __BENCH_H__
 
 int read_mat(char *fname, int *n, float **dst);
+void print_packed_mat(int *mat, int n_col, int n_row);
 void print_mat(int *mat, int n_col, int n_row);
 void print_mat(float *mat, int n_col, int n_row);
 void print_mat(float *mat, int n);

@@ -62,6 +62,7 @@ void squash_matrix(float *in_mat, float *out_mat, int *idx_mat,
                 if (in_mat[(outer_y + inner_y)*sz + outer_x])
                 {
                     memcpy(out_mat + (idx_outer_y + idx_inner_y)*sz + outer_x, in_mat + (outer_y + inner_y)*sz + outer_x, l*sizeof(float)); 
+                    //idx_mat[(idx_outer_y + idx_inner_y++)*(sz/l/16) + idx_out_x/16] |= inner_y << ((idx_out_x % 16)*2);
                     idx_mat[(idx_outer_y + idx_inner_y++)*(sz/l) + idx_out_x] = inner_y;
                 }
             }
@@ -70,5 +71,23 @@ void squash_matrix(float *in_mat, float *out_mat, int *idx_mat,
         idx_outer_y += n;
         idx_inner_y  = 0;
         idx_out_x    = 0;
+    }
+}
+
+void pack_mat(int *mat, int n_col, int n_row)
+{
+    for (int idx_y = 0; idx_y < n_row; ++idx_y)
+    {
+        for (int x_outer = 0; x_outer < n_col; x_outer += 16)
+        {
+            int *src_cell = mat + idx_y*n_col + x_outer;
+            int *dst_cell = mat + idx_y*(n_col/16) + x_outer/16;
+
+            *dst_cell = 0;
+            for (int x_inner = 0; x_inner < 16; ++x_inner)
+            {
+                *dst_cell |= *(src_cell + x_inner) << (x_inner * 2);
+            }
+        }
     }
 }

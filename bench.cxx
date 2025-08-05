@@ -1,9 +1,9 @@
 #include <iostream>
 #include <chrono>
-#include <stdint.h>
-#include <cblas.h>
 #include <Eigen/SparseCore>
 #include <Eigen/Dense>
+#include <stdint.h>
+#include <cblas.h>
 #include "simd_common.h"
 #include "spmm.h"
 #include "bench.h"
@@ -19,7 +19,7 @@ int main(int argv, char **argc)
     int n_blk = atoi(argc[3]), m = atoi(argc[4]), l = atoi(argc[5]);  
     std::size_t n_large = n;
 
-    // OpenBLAS (GEMM) benchmark
+    // cblas (GEMM) benchmark
     float *dst_cblas = (float*)aligned_alloc(64, (sizeof(float) * n * n));
     std::size_t time_sum_blas = 0;
     int num_runs_cblas = 10;
@@ -57,6 +57,7 @@ int main(int argv, char **argc)
     Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> dstdn(n, n);
 
     std::size_t time_sum_eigen = 0;
+    // keep this number lower because Eigen in sparse mode is not suited to this workload (and thus is quite slow)
     int num_runs_eigen = 3;
     for (int idx = 0; idx < num_runs_eigen; ++idx)
     {
@@ -74,11 +75,11 @@ int main(int argv, char **argc)
     printf("Eigen (sparse) time: %lfs, gflops: %f\n", time_sum_eigen*1.0/num_runs_eigen/US_PER_S, gflops);
 
     // Now actually run our code.
-
     float *dst = (float*)aligned_alloc(64, sizeof(float) * n * n);
     float *mat2c = (float*)aligned_alloc(64, sizeof(float) * n * n * n_blk / m);
-    int *dst_idx = (int*)aligned_alloc(64, sizeof(int) * n * n / l * n_blk / m);
+    int *dst_idx = (int*)aligned_alloc(64, sizeof(int) * n * n / l * n_blk / m); /* divide by 4 because only 2 bits used for storing each index */
     memset(dst, 0, sizeof(float) * n * n);
+    memset(dst_idx, 0, n * n / l * n_blk / m / 4);
 
     std::size_t time_sum = 0;
     int num_runs = 10;
@@ -88,7 +89,8 @@ int main(int argv, char **argc)
         // PREP WORK: other papers didn't include this work in their time calculations...
         squash_matrix(mat2, mat2c, dst_idx, n_blk, m, l, n); 
         cpu_transpose(mat2c, n, n * n_blk / m); 
-        cpu_transpose(dst_idx, n / l , n * n_blk / m); 
+        cpu_transpose(dst_idx, n / l , n * n_blk / m);
+        pack_mat(dst_idx, n * n_blk / m, n / l);
 
         auto const start = std::chrono::high_resolution_clock::now();
         simd_spmm(mat1, mat2c, dst_idx, dst, n, n_blk, m, l);
@@ -105,7 +107,7 @@ int main(int argv, char **argc)
         //print_mat(mat2c, n, n * n_blk / m);
         //printf("Index matrix: \n");
         // Already transposed.
-        //print_mat(dst_idx, n * n_blk / m, n / l);
+        //print_packed_mat(dst_idx, n * n_blk / m, n / l);
         //print_mat(dst_idx, n/l, n * n_blk / m);
         verify_matrix(dst_cblas, dst, n);
 
@@ -157,6 +159,21 @@ void print_mat(int *mat, int n_col, int n_row)
     {
         for (int jdx = 0; jdx < n_col; ++jdx)
             printf("%d ", *(mat + idx*n_col + jdx));
+        printf("\n");
+    }
+
+}
+
+void print_packed_mat(int *mat, int n_col, int n_row)
+{
+    for (int idx = 0; idx < n_row; ++idx)
+    {
+        for (int jdx = 0; jdx < n_col/16; ++jdx)
+        {
+            int cur = *(mat + idx*n_col/16 + jdx);
+            for (int j_inner = 0; j_inner < 16; ++j_inner)
+                printf("%d ", (cur >> (j_inner*2)) & 0x03 );
+        }
         printf("\n");
     }
 
