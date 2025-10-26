@@ -15,6 +15,7 @@ whichever is faster. Types are `fp32`.
 **Single-threaded, n=4096** average of 10 runs
 
 | Kernel | CPU | This algorithm | BLAS | Speedup |
+|:-------|:----|--------:|---------------:|---------:|:------------------|
 AVX-512 | **Tiger Lake** i5-1135G7 | 146 | 122 | 1.20 |
 AVX-512 | **Granite Rapids** Xeon 6972P |  158 | --- | --- |
 
