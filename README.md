@@ -4,7 +4,26 @@ High-performance CPU SpMM (N:M sparsity) algorithm accelerated using AVX.
 
 TODOs:
 
+ * More performance optimization?
  * Parameterized N and M (currently only works for 2:4 sparsity)
+
+# Benchmarks
+
+Metrics are in GFLOPs; speedups are compared to either OpenBLAS or MKL,
+whichever is faster. Types are `fp32`.
+
+**Single-threaded, n=4096** average of 10 runs
+
+| Kernel | CPU | This algorithm | BLAS | Speedup |
+AVX-512 | **Tiger Lake** i5-1135G7 | 146 | 122 | 1.20 |
+AVX-512 | **Granite Rapids** Xeon 6972P |  158 | --- | --- |
+
+**Multithreaded, n=4096** average of 10 runs
+
+| Kernel | CPU | Threads |  This algorithm | BLAS | Speedup |
+|:-------|:----|--------:|---------------:|---------:|:------------------|
+AVX-512 | **Tiger Lake** i5-1135G7 | 4 | 560 | 465 | 1.20 |
+AVX-512 | **Granite Rapids** Xeon 6972P | 4 |  629 | --- | ---  |
 
 # Prerequisites
 

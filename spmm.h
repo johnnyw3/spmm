@@ -1,5 +1,5 @@
-#ifndef __GEMM_H__
-#define __GEMM_H__ 1
+#ifndef __SPMM_H__
+#define __SPMM_H__ 1
 #include <x86intrin.h>
 #include <pthread.h>
 #include <string.h>
@@ -696,4 +696,4 @@ void* simd_spmm_worker_avx512(void *argv)
 }
 #endif // USE_AVX512
 
-#endif  // __GEMM_H__
+#endif  // __SPMM_H__
